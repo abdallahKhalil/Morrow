@@ -1,0 +1,30 @@
+# Dependencies
+**/node_modules/
+
+# Local environment files and secrets
+**/.env
+**/.env.*
+!**/.env.example
+
+# SQLite databases and sidecar files
+express-jwt-sqlite/*.db
+express-jwt-sqlite/*.db-*
+
+# Uploaded user content
+express-jwt-sqlite/uploads/**
+
+# Build and test output
+frontend/dist/
+frontend/dist-ssr/
+**/coverage/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Operating system and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json

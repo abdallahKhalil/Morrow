@@ -1,0 +1,116 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: 'Manrope', 'Segoe UI', sans-serif;
+  font-size: 16px;
+  letter-spacing: 0;
+  color: #172b28;
+  background: #f3f6f2;
+  color-scheme: light;
+  --ink: #172b28;
+  --pine: #1e5144;
+  --pine-dark: #163d35;
+  --paper: #f3f6f2;
+  --line: #dce4dd;
+  --muted: #708079;
+  --coral: #d87856;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+#root {
+  width: auto;
+  max-width: none;
+  min-height: 100vh;
+  margin: 0;
+  border: 0;
+  text-align: left;
+  display: block;
+}
+
+::selection {
+  color: #fff;
+  background: #1e5144;
+}
+
+.auth-pattern {
+  background-image: radial-gradient(rgba(233, 244, 234, 0.22) 0.8px, transparent 0.8px);
+  background-position: 0 0;
+  background-size: 18px 18px;
+  mask-image: linear-gradient(135deg, #000 0%, transparent 76%);
+}
+
+.rise-in {
+  animation: rise-in 480ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.dialog-enter {
+  animation: dialog-enter 180ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+/* Animate the grid track so expanded forms push following content down. */
+.expand-down {
+  display: grid;
+  grid-template-rows: 0fr;
+  animation: expand-down 360ms cubic-bezier(0.22, 0.8, 0.2, 1) both;
+}
+
+.date-filter-panel {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows 260ms cubic-bezier(0.22, 0.8, 0.2, 1), opacity 180ms ease;
+}
+
+.date-filter-panel[data-open='true'] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.expand-down > * {
+  min-height: 0;
+  overflow: hidden;
+}
+
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes dialog-enter {
+  from { opacity: 0; transform: translateY(8px) scale(0.99); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes expand-down {
+  from { grid-template-rows: 0fr; }
+  to { grid-template-rows: 1fr; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
