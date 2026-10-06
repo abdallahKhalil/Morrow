@@ -9,7 +9,7 @@ Morrow is a React/Vite invoice and client app backed by an Express API. Local de
 
 ## Install
 
-Install all workspace dependencies from the repository root:
+Install all dependencies from the repository root (a `postinstall` step also installs `express-jwt-sqlite` and `frontend`):
 
 ```powershell
 npm ci

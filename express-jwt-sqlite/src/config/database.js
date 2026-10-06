@@ -3,7 +3,9 @@ const path = require('node:path');
 
 let pool;
 let sqlite;
-const usePostgres = process.env.NODE_ENV === 'test' || Boolean(process.env.DATABASE_URL);
+// Netlify Database exposes its connection string as NETLIFY_DB_URL; an explicit DATABASE_URL takes precedence.
+const connectionString = process.env.DATABASE_URL || process.env.NETLIFY_DB_URL;
+const usePostgres = process.env.NODE_ENV === 'test' || Boolean(connectionString);
 if (process.env.NODE_ENV === 'test') {
   const { newDb } = require('pg-mem');
   const memoryDatabase = newDb({ autoCreateForeignKeyIndices: true });
@@ -11,12 +13,12 @@ if (process.env.NODE_ENV === 'test') {
   pool = new memoryAdapter.Pool();
 } else if (usePostgres) {
   pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
+    connectionString,
     max: process.env.NETLIFY ? 1 : 10,
   });
 } else {
   if (process.env.NETLIFY === 'true') {
-    throw new Error('DATABASE_URL must be set to a persistent PostgreSQL database on Netlify.');
+    throw new Error('DATABASE_URL or NETLIFY_DB_URL must be set to a persistent PostgreSQL database on Netlify.');
   }
   const databasePath = process.env.DB_PATH || path.join(__dirname, '..', '..', 'users.db');
   const BetterSqlite3 = module.require('better-sqlite3');

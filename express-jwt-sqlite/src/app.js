@@ -1,6 +1,6 @@
 require('dotenv').config();
 
-if (!process.env.JWT_SECRET) {
+if (!process.env.JWT_SECRET && require.main === module) {
   throw new Error('JWT_SECRET must be set in the environment.');
 }
 
@@ -15,6 +15,13 @@ const { readImage } = require('./storage/imageStore');
 const app = express();
 
 app.use(express.json());
+
+// In the serverless function a startup throw surfaces only as an opaque 502, so report the misconfiguration instead.
+app.use((req, res, next) => {
+  if (process.env.JWT_SECRET) return next();
+  console.error('JWT_SECRET must be set in the environment.');
+  res.status(500).json({ message: 'The server is missing its JWT_SECRET configuration.' });
+});
 app.get(['/', '/.netlify/functions/api'], (req, res) => {
   res.status(200).json({ message: 'API is running.' });
 });
