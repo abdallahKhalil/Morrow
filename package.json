@@ -15,5 +15,9 @@
     "dev:api": "npm start --workspace express-jwt-sqlite",
     "dev:web": "npm run dev --workspace frontend",
     "import:sqlite": "npm run import:sqlite --workspace express-jwt-sqlite"
+  },
+  "dependencies": {
+    "@neon/config": "^1.8.4",
+    "@neon/env": "^1.5.1"
   }
 }
