@@ -1,6 +1,7 @@
 process.env.JWT_SECRET = 'test_secret_with_at_least_32_characters_long';
 process.env.JWT_EXPIRES_IN = '1h';
-process.env.DB_PATH = ':memory:';
+process.env.NODE_ENV = 'test';
+process.env.MANAGER_INVITATION_CODE = 'test-manager-invite';
 process.env.MANAGER_INVITE_CODE = 'test-manager-invite';
 
 const assert = require('node:assert/strict');
@@ -12,10 +13,11 @@ const app = require('../src/app');
 const db = require('../src/config/database');
 
 describe('authentication API', () => {
-  beforeEach(() => {
-    db.prepare('DELETE FROM clients').run();
-    db.prepare('DELETE FROM invoices').run();
-    db.prepare('DELETE FROM users').run();
+  beforeEach(async () => {
+    await db.initialize();
+    await db.query('DELETE FROM clients');
+    await db.query('DELETE FROM invoices');
+    await db.query('DELETE FROM users');
   });
 
   it('registers a user and rejects duplicate email addresses', async () => {
@@ -334,6 +336,7 @@ describe('agent management API', () => {
     assert.equal('commission_rate_basis_points' in agent.body.user, false);
     assert.equal(paidInvoice.status, 201);
     assert.equal(unpaidInvoice.status, 201);
+    assert.equal(managerReport.status, 200, JSON.stringify(managerReport.body));
     assert.equal(managerReport.body.commissionPercentage, 12.5);
     assert.equal(managerReport.body.summary.paid_commission_cents, 1250);
     assert.equal(managerReport.body.summary.unpaid_commission_cents, 1000);
@@ -459,7 +462,7 @@ describe('client management API', () => {
   }
 
   it('creates, lists, edits, and scopes clients for managers and assigned agents', async () => {
-    db.prepare('DELETE FROM clients').run();
+    await db.query('DELETE FROM clients');
     const firstAgentToken = await registerAndLogin({ username: 'client-agent-one', email: 'client-agent-one@example.com', password: 'correct-horse' });
     const secondAgentToken = await registerAndLogin({ username: 'client-agent-two', email: 'client-agent-two@example.com', password: 'correct-horse' });
     const managerToken = await registerAndLogin({
@@ -559,6 +562,6 @@ describe('client management API', () => {
   });
 });
 
-after(() => {
-  db.close();
+after(async () => {
+  await db.close();
 });

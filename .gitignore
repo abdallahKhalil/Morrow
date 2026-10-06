@@ -17,6 +17,7 @@ express-jwt-sqlite/uploads/**
 frontend/dist/
 frontend/dist-ssr/
 **/coverage/
+.netlify/
 
 # Logs
 *.log

@@ -1,7 +1,7 @@
 const jwt = require('jsonwebtoken');
 const db = require('../config/database');
 
-function authMiddleware(req, res, next) {
+async function authMiddleware(req, res, next) {
   const authorization = req.get('authorization');
   const token = authorization?.startsWith('Bearer ')
     ? authorization.slice('Bearer '.length).trim()
@@ -19,7 +19,7 @@ function authMiddleware(req, res, next) {
   }
 
   // Refresh role and blocked status from the database instead of trusting stale token claims.
-  const user = db.prepare('SELECT id, role, is_blocked FROM users WHERE id = ?').get(claims.id);
+  const user = await db.prepare('SELECT id, role, is_blocked FROM users WHERE id = ?').get(claims.id);
   if (!user) {
     return res.status(403).json({ message: 'Invalid or expired token.' });
   }

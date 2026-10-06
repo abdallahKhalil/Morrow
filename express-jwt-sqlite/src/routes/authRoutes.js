@@ -19,20 +19,21 @@ router.post('/register', async (req, res) => {
     return res.status(400).json({ message: 'Username, email, password, and a valid account role are required.' });
   }
 
-  if (role === 'manager' && (!process.env.MANAGER_INVITE_CODE || managerInviteCode !== process.env.MANAGER_INVITE_CODE)) {
+  const validManagerCode = process.env.MANAGER_INVITATION_CODE || process.env.MANAGER_INVITE_CODE
+  if (role === 'manager' && (!validManagerCode || managerInviteCode !== validManagerCode)) {
     return res.status(403).json({ message: 'A valid manager invitation code is required.' });
   }
 
   try {
     const passwordHash = await bcrypt.hash(password, 10);
-    const agentCode = role === 'sales_agent' ? nextAgentCode(db) : null;
-    const result = db.prepare(
+    const agentCode = role === 'sales_agent' ? await nextAgentCode(db) : null;
+    const result = await db.prepare(
       'INSERT INTO users (username, email, password, role, agent_code) VALUES (?, ?, ?, ?, ?)'
     ).run(username.trim(), email.trim().toLowerCase(), passwordHash, role, agentCode);
 
     return res.status(201).json({ message: 'User registered successfully.', userId: result.lastInsertRowid });
   } catch (error) {
-    if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+    if (error.code === '23505') {
       return res.status(400).json({ message: 'Username or email is already registered.' });
     }
 
@@ -49,7 +50,7 @@ router.post('/login', async (req, res) => {
   }
 
   try {
-    const user = db.prepare(
+    const user = await db.prepare(
       'SELECT id, username, email, password, is_blocked FROM users WHERE email = ?'
     ).get(email.trim().toLowerCase());
 
@@ -74,10 +75,10 @@ router.post('/login', async (req, res) => {
   }
 });
 
-router.get('/profile', authMiddleware, (req, res) => {
+router.get('/profile', authMiddleware, async (req, res) => {
   try {
     // Keep the session response narrow; staff details are fetched through manager-only routes.
-    const user = db.prepare(
+    const user = await db.prepare(
       'SELECT id, username, email, role, agent_code FROM users WHERE id = ?'
     ).get(req.user.id);
 

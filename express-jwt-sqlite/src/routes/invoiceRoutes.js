@@ -57,7 +57,7 @@ function managerOnly(req, res, next) {
   return next();
 }
 
-function invoiceDetails(invoiceId) {
+async function invoiceDetails(invoiceId) {
   return db.prepare(`
     SELECT i.id, i.user_id, i.client_id, i.invoice_number, i.client_name, i.amount_cents,
       i.status, i.issue_date, i.due_date, i.created_at, u.username AS agent_name
@@ -69,24 +69,24 @@ function invoiceDetails(invoiceId) {
 
 router.use(authMiddleware);
 
-router.get('/agents', managerOnly, (req, res) => {
-  const agents = db.prepare("SELECT id, username, agent_code FROM users WHERE role = 'sales_agent' ORDER BY username COLLATE NOCASE").all();
+router.get('/agents', managerOnly, async (req, res) => {
+  const agents = await db.prepare("SELECT id, username, agent_code FROM users WHERE role = 'sales_agent' ORDER BY lower(username)").all();
   return res.status(200).json({ agents });
 });
 
-router.get('/:invoiceId', (req, res) => {
+router.get('/:invoiceId', async (req, res) => {
   const invoiceId = Number(req.params.invoiceId);
   if (!Number.isSafeInteger(invoiceId) || invoiceId < 1) {
     return res.status(400).json({ message: 'Choose a valid invoice.' });
   }
-  const invoice = invoiceDetails(invoiceId);
+  const invoice = await invoiceDetails(invoiceId);
   if (!invoice || (req.user.role !== 'manager' && invoice.user_id !== req.user.id)) {
     return res.status(404).json({ message: 'Invoice not found.' });
   }
   return res.status(200).json({ invoice });
 });
 
-router.patch('/:invoiceId', (req, res) => {
+router.patch('/:invoiceId', async (req, res) => {
   const invoiceId = Number(req.params.invoiceId);
   const updates = req.body || {};
   const isManager = req.user.role === 'manager';
@@ -107,7 +107,7 @@ router.patch('/:invoiceId', (req, res) => {
     return res.status(400).json({ message: 'Choose a valid due date.' });
   }
 
-  const invoice = invoiceDetails(invoiceId);
+  const invoice = await invoiceDetails(invoiceId);
   if (!invoice || (!isManager && invoice.user_id !== req.user.id)) {
     return res.status(404).json({ message: 'Invoice not found.' });
   }
@@ -132,7 +132,7 @@ router.patch('/:invoiceId', (req, res) => {
       clientId = null;
       clientName = updates.clientName.trim();
     } else {
-      const selectedClient = db.prepare('SELECT id, first_name, last_name, assigned_agent_id FROM clients WHERE id = ?').get(requestedClientId);
+      const selectedClient = await db.prepare('SELECT id, first_name, last_name, assigned_agent_id FROM clients WHERE id = ?').get(requestedClientId);
       if (!selectedClient || selectedClient.assigned_agent_id !== req.user.id) {
         return res.status(404).json({ message: 'Client not found.' });
       }
@@ -147,7 +147,7 @@ router.patch('/:invoiceId', (req, res) => {
     if (!Number.isSafeInteger(agentId) || agentId < 1) {
       return res.status(400).json({ message: 'Choose a valid sales agent.' });
     }
-    nextAgent = db.prepare("SELECT id, agent_code FROM users WHERE id = ? AND role = 'sales_agent'").get(agentId);
+    nextAgent = await db.prepare("SELECT id, agent_code FROM users WHERE id = ? AND role = 'sales_agent'").get(agentId);
     if (!nextAgent) return res.status(400).json({ message: 'Choose a valid sales agent.' });
   }
 
@@ -166,15 +166,15 @@ router.patch('/:invoiceId', (req, res) => {
   }
 
   try {
-    db.prepare(`
+    await db.prepare(`
       UPDATE invoices
       SET user_id = ?, invoice_number = ?, client_id = ?, client_name = ?,
         amount_cents = ?, issue_date = ?, status = ?, due_date = ?
       WHERE id = ?
     `).run(userId, invoiceNumber, clientId, clientName, amountCents, issueDate, status, dueDate, invoiceId);
-    return res.status(200).json({ invoice: invoiceDetails(invoiceId) });
+    return res.status(200).json({ invoice: await invoiceDetails(invoiceId) });
   } catch (error) {
-    if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+    if (error.code === '23505') {
       return res.status(409).json({ message: 'That invoice number already exists for this sales agent.' });
     }
     console.error('Invoice update failed:', error);
@@ -182,7 +182,7 @@ router.patch('/:invoiceId', (req, res) => {
   }
 });
 
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   const period = req.query.period || 'this-month';
   const range = getDateRange(period);
   if (range === undefined) {
@@ -204,7 +204,7 @@ router.get('/', (req, res) => {
 
   try {
     // The list view needs display and filter fields, not editable invoice identifiers.
-    const invoices = db.prepare(`
+    const invoices = await db.prepare(`
       SELECT i.id, i.invoice_number, i.client_name, i.amount_cents,
         i.status, i.issue_date, i.due_date, u.username AS agent_name
       FROM invoices i
@@ -238,7 +238,7 @@ router.get('/', (req, res) => {
       const joinFilters = range ? 'AND i.issue_date >= ? AND i.issue_date < ?' : '';
       const teamParameters = range ? [range.start, range.end] : [];
       // Keep contact and government-ID fields out of the dashboard summary payload.
-      teamBreakdown = db.prepare(`
+      teamBreakdown = await db.prepare(`
         SELECT u.id AS user_id, u.username,
           u.first_name, u.last_name, u.is_blocked,
           COUNT(i.id) AS invoice_count,
@@ -249,7 +249,7 @@ router.get('/', (req, res) => {
         LEFT JOIN invoices i ON i.user_id = u.id ${joinFilters}
         WHERE u.role = 'sales_agent'
         GROUP BY u.id, u.username
-        ORDER BY u.username COLLATE NOCASE
+        ORDER BY lower(u.username)
       `).all(...teamParameters);
     }
 
@@ -260,7 +260,7 @@ router.get('/', (req, res) => {
   }
 });
 
-router.post('/', (req, res) => {
+router.post('/', async (req, res) => {
   const {
     invoiceNumber,
     clientName,
@@ -275,7 +275,7 @@ router.post('/', (req, res) => {
   const amountCents = Math.round(amountValue * 100);
   const normalizedClientId = clientId === undefined || clientId === null || clientId === '' ? null : Number(clientId);
   const selectedClient = normalizedClientId !== null && Number.isSafeInteger(normalizedClientId) && normalizedClientId > 0
-    ? db.prepare('SELECT id, first_name, last_name, assigned_agent_id FROM clients WHERE id = ?').get(normalizedClientId)
+    ? await db.prepare('SELECT id, first_name, last_name, assigned_agent_id FROM clients WHERE id = ?').get(normalizedClientId)
     : null;
   const clientIsAccessible = selectedClient && (
     req.user.role === 'manager' || selectedClient.assigned_agent_id === req.user.id
@@ -285,7 +285,7 @@ router.post('/', (req, res) => {
     : typeof clientName === 'string' ? clientName.trim() : '';
   const ownerId = req.user.role === 'manager' ? Number(salesAgentId) : req.user.id;
   const owner = Number.isSafeInteger(ownerId) && ownerId > 0
-    ? db.prepare("SELECT id, role, agent_code FROM users WHERE id = ?").get(ownerId)
+    ? await db.prepare("SELECT id, role, agent_code FROM users WHERE id = ?").get(ownerId)
     : null;
 
   if (normalizedClientId !== null && !clientIsAccessible) {
@@ -305,7 +305,7 @@ router.post('/', (req, res) => {
   }
 
   try {
-    const result = db.prepare(`
+    const result = await db.prepare(`
       INSERT INTO invoices (user_id, client_id, invoice_number, client_name, amount_cents, status, issue_date, due_date)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
@@ -318,11 +318,11 @@ router.post('/', (req, res) => {
       issueDate,
       dueDate,
     );
-    const invoice = invoiceDetails(result.lastInsertRowid);
+    const invoice = await invoiceDetails(result.lastInsertRowid);
 
     return res.status(201).json({ message: 'Invoice created successfully.', invoice });
   } catch (error) {
-    if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+    if (error.code === '23505') {
       return res.status(400).json({ message: 'That invoice number is already in use.' });
     }
     console.error('Invoice creation failed:', error);

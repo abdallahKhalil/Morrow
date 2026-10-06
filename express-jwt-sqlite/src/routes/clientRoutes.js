@@ -1,14 +1,13 @@
 const express = require('express');
-const fs = require('node:fs');
-const path = require('node:path');
 const db = require('../config/database');
 const authMiddleware = require('../middleware/authMiddleware');
 const createImageUpload = require('../middleware/imageUpload');
+const { deleteImage, saveImage } = require('../storage/imageStore');
 
 const router = express.Router();
 const uploadShopPhoto = createImageUpload('client-shops', 'shopPhoto');
 
-function readClient(clientId) {
+async function readClient(clientId) {
   return db.prepare(`
     SELECT c.id, c.shop_name, c.first_name, c.last_name, c.phone_number, c.address,
       c.location, c.assigned_agent_id, c.shop_photo_path,
@@ -23,12 +22,8 @@ function agentCanAccess(req, client) {
   return req.user.role === 'manager' || client.assigned_agent_id === req.user.id;
 }
 
-function getAssignedAgent(agentId) {
+async function getAssignedAgent(agentId) {
   return db.prepare("SELECT id FROM users WHERE id = ? AND role = 'sales_agent' AND is_blocked = 0").get(agentId);
-}
-
-function removeUpload(file) {
-  if (file && fs.existsSync(file.path)) fs.unlinkSync(file.path);
 }
 
 function normalizeRequiredText(value, maximumLength) {
@@ -39,9 +34,9 @@ function normalizeRequiredText(value, maximumLength) {
 
 router.use(authMiddleware);
 
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   const clients = req.user.role === 'manager'
-    ? db.prepare(`
+    ? await db.prepare(`
       SELECT c.id, c.shop_name, c.first_name, c.last_name, c.phone_number, c.address,
         c.location, c.assigned_agent_id, c.shop_photo_path,
         u.first_name AS agent_first_name, u.last_name AS agent_last_name, u.username AS agent_username
@@ -49,7 +44,7 @@ router.get('/', (req, res) => {
       LEFT JOIN users u ON u.id = c.assigned_agent_id
       ORDER BY c.updated_at DESC, c.id DESC
     `).all()
-    : db.prepare(`
+    : await db.prepare(`
       SELECT c.id, c.shop_name, c.first_name, c.last_name, c.phone_number, c.address,
         c.location, c.assigned_agent_id, c.shop_photo_path,
         u.first_name AS agent_first_name, u.last_name AS agent_last_name, u.username AS agent_username
@@ -61,7 +56,7 @@ router.get('/', (req, res) => {
   return res.status(200).json({ clients });
 });
 
-router.post('/', uploadShopPhoto, (req, res) => {
+router.post('/', uploadShopPhoto, async (req, res) => {
   const { shopName, firstName, lastName, phoneNumber, address, location = '', assignedAgentId = '' } = req.body || {};
   const normalized = {
     shopName: normalizeRequiredText(shopName, 120),
@@ -75,19 +70,19 @@ router.post('/', uploadShopPhoto, (req, res) => {
   const ownerId = req.user.role === 'manager'
     ? assignedAgentId ? Number(assignedAgentId) : null
     : req.user.id;
-  const owner = ownerId === null ? null : getAssignedAgent(ownerId);
+  const owner = ownerId === null ? null : await getAssignedAgent(ownerId);
 
   if (Object.values(normalized).some((value) => !value)) {
-    removeUpload(req.file);
     return res.status(400).json({ message: 'Shop name, first name, last name, phone number, and address are required.' });
   }
   if (req.user.role === 'manager' && assignedAgentId && !owner) {
-    removeUpload(req.file);
     return res.status(400).json({ message: 'Choose an active sales agent.' });
   }
 
+  let shopPhotoPath = null;
   try {
-    const result = db.prepare(`
+    shopPhotoPath = await saveImage('client-shops', req.file);
+    const result = await db.prepare(`
       INSERT INTO clients (
         shop_name, first_name, last_name, phone_number, address, location,
         assigned_agent_id, created_by_user_id, shop_photo_path
@@ -101,45 +96,42 @@ router.post('/', uploadShopPhoto, (req, res) => {
       optionalLocation,
       ownerId,
       req.user.id,
-      req.file?.filename ?? null,
+      shopPhotoPath,
     );
-    return res.status(201).json({ client: readClient(result.lastInsertRowid) });
+    return res.status(201).json({ client: await readClient(result.lastInsertRowid) });
   } catch (error) {
-    removeUpload(req.file);
+    if (shopPhotoPath) await deleteImage('client-shops', shopPhotoPath).catch(() => {});
     console.error('Client creation failed:', error);
     return res.status(500).json({ message: 'Unable to create this client.' });
   }
 });
 
-router.get('/:clientId', (req, res) => {
+router.get('/:clientId', async (req, res) => {
   const clientId = Number(req.params.clientId);
   if (!Number.isSafeInteger(clientId) || clientId < 1) {
     return res.status(400).json({ message: 'Choose a valid client.' });
   }
-  const client = readClient(clientId);
+  const client = await readClient(clientId);
   if (!client || !agentCanAccess(req, client)) {
     return res.status(404).json({ message: 'Client not found.' });
   }
   return res.status(200).json({ client });
 });
 
-router.patch('/:clientId', uploadShopPhoto, (req, res) => {
+router.patch('/:clientId', uploadShopPhoto, async (req, res) => {
   const clientId = Number(req.params.clientId);
   if (!Number.isSafeInteger(clientId) || clientId < 1) {
-    removeUpload(req.file);
     return res.status(400).json({ message: 'Choose a valid client.' });
   }
 
-  const client = readClient(clientId);
+  const client = await readClient(clientId);
   if (!client || !agentCanAccess(req, client)) {
-    removeUpload(req.file);
     return res.status(404).json({ message: 'Client not found.' });
   }
 
   const { shopName, firstName, lastName, phoneNumber, address, location, assignedAgentId } = req.body || {};
   // Reassignment is manager-only; agents can edit details but not transfer ownership.
   if (req.user.role !== 'manager' && Object.hasOwn(req.body || {}, 'assignedAgentId')) {
-    removeUpload(req.file);
     return res.status(403).json({ message: 'Only a manager can reassign a client.' });
   }
 
@@ -151,23 +143,24 @@ router.patch('/:clientId', uploadShopPhoto, (req, res) => {
     address: address === undefined ? client.address : normalizeRequiredText(address, 300),
     location: location === undefined ? client.location : typeof location === 'string' && location.trim() ? location.trim().slice(0, 200) : null,
     assignedAgentId: client.assigned_agent_id,
-    shopPhotoPath: req.file?.filename ?? client.shop_photo_path,
+    shopPhotoPath: client.shop_photo_path,
   };
   if (Object.values({ shopName: next.shopName, firstName: next.firstName, lastName: next.lastName, phoneNumber: next.phoneNumber, address: next.address }).some((value) => !value)) {
-    removeUpload(req.file);
     return res.status(400).json({ message: 'Shop name, first name, last name, phone number, and address are required.' });
   }
 
   if (req.user.role === 'manager' && assignedAgentId !== undefined) {
     next.assignedAgentId = assignedAgentId ? Number(assignedAgentId) : null;
-    if (next.assignedAgentId !== null && !getAssignedAgent(next.assignedAgentId)) {
-      removeUpload(req.file);
+    if (next.assignedAgentId !== null && !await getAssignedAgent(next.assignedAgentId)) {
       return res.status(400).json({ message: 'Choose an active sales agent.' });
     }
   }
 
+  let newShopPhotoPath = null;
   try {
-    db.prepare(`
+    newShopPhotoPath = await saveImage('client-shops', req.file);
+    if (newShopPhotoPath) next.shopPhotoPath = newShopPhotoPath;
+    await db.prepare(`
       UPDATE clients
       SET shop_name = ?, first_name = ?, last_name = ?, phone_number = ?, address = ?, location = ?,
         assigned_agent_id = ?, shop_photo_path = ?, updated_at = CURRENT_TIMESTAMP
@@ -183,13 +176,14 @@ router.patch('/:clientId', uploadShopPhoto, (req, res) => {
       next.shopPhotoPath,
       clientId,
     );
-    if (req.file && client.shop_photo_path) {
-      const oldPhoto = path.join(__dirname, '..', '..', 'uploads', 'client-shops', client.shop_photo_path);
-      if (fs.existsSync(oldPhoto)) fs.unlinkSync(oldPhoto);
+    if (newShopPhotoPath && client.shop_photo_path) {
+      await deleteImage('client-shops', client.shop_photo_path).catch((cleanupError) => {
+        console.error('Previous shop photo cleanup failed:', cleanupError);
+      });
     }
-    return res.status(200).json({ client: readClient(clientId) });
+    return res.status(200).json({ client: await readClient(clientId) });
   } catch (error) {
-    removeUpload(req.file);
+    if (newShopPhotoPath) await deleteImage('client-shops', newShopPhotoPath).catch(() => {});
     console.error('Client update failed:', error);
     return res.status(500).json({ message: 'Unable to update this client.' });
   }

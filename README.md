@@ -1,57 +1,68 @@
 # Morrow
 
-Morrow is an invoice and client management app with separate manager and sales-agent dashboards. The frontend is a React/Vite application; the API is an Express service backed by SQLite.
+Morrow is a React/Vite invoice and client app backed by an Express API. Local development can use the existing SQLite database; Netlify Functions use persistent PostgreSQL and Netlify Blobs for uploaded photos.
 
 ## Requirements
 
 - Node.js 20.19+ or 22.12+
 - npm
 
-## Setup
+## Install
 
-Install each app's dependencies from the workspace root:
+Install all workspace dependencies from the repository root:
 
 ```powershell
-npm --prefix express-jwt-sqlite install
-npm --prefix frontend install
+npm ci
 ```
 
-Create the backend environment file from its example:
+## Local Development
+
+The local API uses `express-jwt-sqlite/.env` and falls back to `express-jwt-sqlite/users.db` when `DATABASE_URL` is not set. Create the local environment file from the safe template:
 
 ```powershell
 Copy-Item express-jwt-sqlite/.env.example express-jwt-sqlite/.env
 ```
 
-Set unique values for `JWT_SECRET` and `MANAGER_INVITE_CODE` in `express-jwt-sqlite/.env`. Keep this file local and never commit it. Generate a strong JWT secret rather than reusing a password. `JWT_EXPIRES_IN` and `PORT` have development defaults.
+Set a unique `JWT_SECRET` and `MANAGER_INVITATION_CODE`. Keep `.env` local and never commit it. The local API also stores uploads under `express-jwt-sqlite/uploads/`.
 
-The frontend uses Vite's `/api` proxy by default. Its `.env.example` documents the optional `VITE_API_BASE_URL` setting. Values prefixed with `VITE_` are embedded in browser code, so only put public configuration such as an API base URL there, never passwords, tokens, or private API keys.
-
-## Run Locally
-
-Start the API in one terminal:
+Run the API and frontend in separate terminals:
 
 ```powershell
-npm --prefix express-jwt-sqlite start
+npm run dev:api
+npm run dev:web
 ```
 
-Start the frontend in another terminal:
+Vite serves the app at `http://localhost:5173` and proxies `/api` and `/uploads` to the local Express server on port 3000.
+
+## Netlify Deployment
+
+The root `netlify.toml` builds the frontend and deploys `netlify/functions/api.js`. In Netlify Site configuration, set these server-side environment variables:
+
+- `DATABASE_URL`: connection URL for a persistent PostgreSQL database (use the provider's TLS-enabled URL).
+- `JWT_SECRET`: a long, randomly generated secret.
+- `MANAGER_INVITATION_CODE`: the private code required to register manager accounts.
+- `JWT_EXPIRES_IN`: optional token lifetime; defaults to `1h`.
+
+Netlify Blobs stores profile and shop photos. The function initializes the PostgreSQL schema on first request. Do not put secrets in `VITE_*` variables; frontend-prefixed values are public in the browser bundle.
+
+## Import Existing SQLite Data
+
+The importer copies existing users, clients, invoices, and their profile/shop photos. Create an empty PostgreSQL database first, then provide the database URL and Netlify Blobs access values in your shell without committing them:
 
 ```powershell
-npm --prefix frontend run dev
+$env:DATABASE_URL = 'postgresql://...'
+$env:NETLIFY_SITE_ID = 'your-netlify-site-id'
+$env:NETLIFY_AUTH_TOKEN = 'your-netlify-personal-access-token'
+$env:NETLIFY_BLOBS_IMPORT = 'true'
+npm run import:sqlite
 ```
 
-Open the local URL printed by Vite, normally `http://localhost:5173`. The API listens on port `3000` by default. Register a sales-agent account from the app. Manager registration requires the invitation code configured in the backend `.env`.
+The importer reads `express-jwt-sqlite/users.db` and the local `uploads/` folders by default. It is designed for an empty destination; review the counts and the live site after import before removing any local data. Never commit the shell values or token.
 
 ## Checks
 
-Run the API tests and frontend checks from the workspace root:
-
 ```powershell
-npm --prefix express-jwt-sqlite test
-npm --prefix frontend run lint
-npm --prefix frontend run build
+npm test
+npm run lint
+npm run build
 ```
-
-## Local Data and Git
-
-SQLite databases, uploaded files, environment files, dependency folders, and build outputs are local/generated data and are excluded by the root `.gitignore`. The `.env.example` files are safe templates to commit; replace their placeholders only in local `.env` files. Review `git status` and inspect staged files before pushing, especially to ensure no database, upload, environment, or credential files are included.

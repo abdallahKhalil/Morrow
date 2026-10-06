@@ -11,6 +11,16 @@ function formatDate(value) {
   return value ? dateFormatter.format(new Date(`${value}T00:00:00.000Z`)) : 'Not set'
 }
 
+function formatCreatedAt(value) {
+  if (!value) return '—'
+  const date = value instanceof Date
+    ? value
+    : new Date(value.includes('T') ? value : `${value.replace(' ', 'T')}Z`)
+  return Number.isNaN(date.getTime())
+    ? '—'
+    : new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
+}
+
 function InvoiceDetailsDialog({ invoiceId, isManager, onClose, onUpdated }) {
   const [invoice, setInvoice] = useState(null)
   const [agents, setAgents] = useState([])
@@ -141,7 +151,7 @@ function InvoiceDetailsDialog({ invoiceId, isManager, onClose, onUpdated }) {
             </label>
             <label className="space-y-1.5 text-xs font-semibold text-[#52655b]" htmlFor="detail-created-at">
               Created
-              <input className={fieldClass} id="detail-created-at" readOnly value={new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(`${invoice.created_at.replace(' ', 'T')}Z`))} />
+              <input className={fieldClass} id="detail-created-at" readOnly value={formatCreatedAt(invoice.created_at)} />
             </label>
             {isManager && <label className="space-y-1.5 text-xs font-semibold text-[#52655b]" htmlFor="detail-sales-agent">
               Sales agent

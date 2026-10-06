@@ -7,7 +7,9 @@ const dateFormatter = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }
 
 function formatCreatedAt(value) {
   if (!value) return '—'
-  const date = new Date(`${value.replace(' ', 'T')}Z`)
+  const date = value instanceof Date
+    ? value
+    : new Date(value.includes('T') ? value : `${value.replace(' ', 'T')}Z`)
   return Number.isNaN(date.getTime()) ? '—' : dateFormatter.format(date)
 }
 

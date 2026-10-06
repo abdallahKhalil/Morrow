@@ -1,10 +1,10 @@
 const bcrypt = require('bcryptjs');
 const express = require('express');
-const fs = require('node:fs');
 const db = require('../config/database');
 const authMiddleware = require('../middleware/authMiddleware');
 const createImageUpload = require('../middleware/imageUpload');
 const nextAgentCode = require('../agentCode');
+const { deleteImage, saveImage } = require('../storage/imageStore');
 
 const router = express.Router();
 const uploadProfilePhoto = createImageUpload('agent-profiles', 'profilePhoto');
@@ -16,7 +16,7 @@ function managerOnly(req, res, next) {
   return next();
 }
 
-function getAgent(agentId) {
+async function getAgent(agentId) {
   return db.prepare(`
     SELECT id, username, email, agent_code, first_name, last_name,
       phone_number, id_number, profile_photo_path, is_blocked,
@@ -28,12 +28,12 @@ function getAgent(agentId) {
 
 router.use(authMiddleware);
 
-router.get('/', managerOnly, (req, res) => {
-  const agents = db.prepare(`
+router.get('/', managerOnly, async (req, res) => {
+  const agents = await db.prepare(`
     SELECT id, username, agent_code, first_name, last_name, is_blocked
     FROM users
     WHERE role = 'sales_agent'
-    ORDER BY first_name COLLATE NOCASE, last_name COLLATE NOCASE, username COLLATE NOCASE
+    ORDER BY lower(first_name), lower(last_name), lower(username)
   `).all();
   return res.status(200).json({ agents });
 });
@@ -62,17 +62,19 @@ router.post('/', managerOnly, uploadProfilePhoto, async (req, res) => {
     !Number.isFinite(commissionValue) || commissionValue < 0 || commissionValue > 100 ||
     Math.abs(commissionValue * 100 - commissionRateBasisPoints) > 0.000001
   ) {
-    if (req.file) fs.unlinkSync(req.file.path);
     return res.status(400).json({ message: 'First name, last name, phone, valid email, and an initial password of at least 8 characters are required.' });
   }
+  let profilePhotoPath = null;
   try {
-    const agentCode = nextAgentCode(db);
+    const agentCode = await nextAgentCode(db);
+    profilePhotoPath = await saveImage('agent-profiles', req.file);
     const passwordHash = await bcrypt.hash(password, 10);
     const fullName = `${firstName.trim()} ${lastName.trim()}`;
-    const username = db.prepare('SELECT id FROM users WHERE username = ?').get(fullName)
+    const existingName = await db.prepare('SELECT id FROM users WHERE username = ?').get(fullName)
+    const username = existingName
       ? `${fullName} (${agentCode})`
       : fullName;
-    const result = db.prepare(`
+    const result = await db.prepare(`
       INSERT INTO users (
         username, email, password, role, agent_code,
         first_name, last_name, phone_number, id_number, profile_photo_path,
@@ -87,15 +89,15 @@ router.post('/', managerOnly, uploadProfilePhoto, async (req, res) => {
       lastName.trim(),
       phoneNumber.trim(),
       typeof idNumber === 'string' && idNumber.trim() ? idNumber.trim() : null,
-      req.file?.filename ?? null,
+      profilePhotoPath,
       commissionRateBasisPoints,
     );
 
     // Agent details are fetched on demand through the manager-only detail route.
     return res.status(201).json({ message: 'Sales agent created successfully.', agent: { id: result.lastInsertRowid } });
   } catch (error) {
-    if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
-    if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+    if (profilePhotoPath) await deleteImage('agent-profiles', profilePhotoPath).catch(() => {});
+    if (error.code === '23505') {
       return res.status(400).json({ message: 'That email address is already registered.' });
     }
     console.error('Agent creation failed:', error);
@@ -131,11 +133,11 @@ function getPeriodRange(period) {
 
 function commissionCentsSql() {
   // Store commission using the same integer-cent precision as invoice amounts.
-  return 'CAST(ROUND(i.amount_cents * u.commission_rate_basis_points / 10000.0) AS INTEGER)';
+  return '((i.amount_cents * u.commission_rate_basis_points + 5000) / 10000)';
 }
 
-function commissionReport(agentId, period) {
-  const agent = getAgent(agentId);
+async function commissionReport(agentId, period) {
+  const agent = await getAgent(agentId);
   if (!agent) return null;
   const range = getPeriodRange(period);
   if (range === undefined) return { invalidPeriod: true };
@@ -143,7 +145,7 @@ function commissionReport(agentId, period) {
   // The interpolated clause is fixed; range values are passed separately as SQL parameters.
   const rangeParameters = range ? [range.start, range.end] : [];
   const commissionSql = commissionCentsSql();
-  const summary = db.prepare(`
+  const summary = await db.prepare(`
     SELECT
       COALESCE(SUM(CASE WHEN i.status = 'paid' THEN ${commissionSql} ELSE 0 END), 0) AS paid_commission_cents,
       COALESCE(SUM(CASE WHEN i.status = 'unpaid' THEN ${commissionSql} ELSE 0 END), 0) AS unpaid_commission_cents,
@@ -160,7 +162,7 @@ function commissionReport(agentId, period) {
   // Long reports group by month; shorter reports keep daily buckets.
     ? "substr(i.issue_date, 1, 7)"
     : 'i.issue_date';
-  const series = db.prepare(`
+  const series = await db.prepare(`
     SELECT ${bucketExpression} AS bucket,
       COALESCE(SUM(CASE WHEN i.status = 'paid' THEN ${commissionSql} ELSE 0 END), 0) AS paid_commission_cents,
       COUNT(CASE WHEN i.status = 'paid' THEN 1 END) AS paid_invoice_count
@@ -180,7 +182,7 @@ function commissionReport(agentId, period) {
   };
 }
 
-router.get('/:agentId/commission', (req, res) => {
+router.get('/:agentId/commission', async (req, res) => {
   const agentId = Number(req.params.agentId);
   if (!Number.isSafeInteger(agentId) || agentId < 1) {
     return res.status(400).json({ message: 'Choose a valid sales agent.' });
@@ -189,23 +191,28 @@ router.get('/:agentId/commission', (req, res) => {
     return res.status(403).json({ message: 'You can only view your own commission.' });
   }
   const period = req.query.period || 'this-month';
-  const report = commissionReport(agentId, period);
-  if (!report) return res.status(404).json({ message: 'Sales agent not found.' });
-  if (report.invalidPeriod) return res.status(400).json({ message: 'Choose a valid reporting period.' });
-  return res.status(200).json(report);
+  try {
+    const report = await commissionReport(agentId, period);
+    if (!report) return res.status(404).json({ message: 'Sales agent not found.' });
+    if (report.invalidPeriod) return res.status(400).json({ message: 'Choose a valid reporting period.' });
+    return res.status(200).json(report);
+  } catch (error) {
+    console.error('Commission report failed:', error);
+    return res.status(500).json({ message: 'Unable to retrieve commission totals.' });
+  }
 });
 
-router.get('/:agentId', managerOnly, (req, res) => {
+router.get('/:agentId', managerOnly, async (req, res) => {
   const agentId = Number(req.params.agentId);
   if (!Number.isSafeInteger(agentId) || agentId < 1) {
     return res.status(400).json({ message: 'Choose a valid sales agent.' });
   }
-  const agent = getAgent(agentId);
+  const agent = await getAgent(agentId);
   if (!agent) return res.status(404).json({ message: 'Sales agent not found.' });
   return res.status(200).json({ agent });
 });
 
-router.patch('/:agentId', managerOnly, (req, res) => {
+router.patch('/:agentId', managerOnly, async (req, res) => {
   const agentId = Number(req.params.agentId);
   const { commissionPercentage } = req.body || {};
   const commissionValue = Number(commissionPercentage);
@@ -215,23 +222,23 @@ router.patch('/:agentId', managerOnly, (req, res) => {
     Math.abs(commissionValue * 100 - commissionRateBasisPoints) > 0.000001) {
     return res.status(400).json({ message: 'Enter a commission percentage between 0 and 100, with up to two decimal places.' });
   }
-  const agent = getAgent(agentId);
+  const agent = await getAgent(agentId);
   if (!agent) return res.status(404).json({ message: 'Sales agent not found.' });
-  db.prepare('UPDATE users SET commission_rate_basis_points = ? WHERE id = ?').run(commissionRateBasisPoints, agentId);
-  return res.status(200).json({ agent: getAgent(agentId) });
+  await db.prepare('UPDATE users SET commission_rate_basis_points = ? WHERE id = ?').run(commissionRateBasisPoints, agentId);
+  return res.status(200).json({ agent: await getAgent(agentId) });
 });
 
-router.patch('/:agentId/block', managerOnly, (req, res) => {
+router.patch('/:agentId/block', managerOnly, async (req, res) => {
   const agentId = Number(req.params.agentId);
   const { blocked } = req.body || {};
   if (!Number.isSafeInteger(agentId) || agentId < 1 || typeof blocked !== 'boolean') {
     return res.status(400).json({ message: 'Choose a sales agent and a valid access status.' });
   }
 
-  const agent = getAgent(agentId);
+  const agent = await getAgent(agentId);
   if (!agent) return res.status(404).json({ message: 'Sales agent not found.' });
-  db.prepare('UPDATE users SET is_blocked = ? WHERE id = ?').run(blocked ? 1 : 0, agentId);
-  return res.status(200).json({ agent: getAgent(agentId) });
+  await db.prepare('UPDATE users SET is_blocked = ? WHERE id = ?').run(blocked ? 1 : 0, agentId);
+  return res.status(200).json({ agent: await getAgent(agentId) });
 });
 
 module.exports = router;

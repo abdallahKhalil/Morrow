@@ -1,0 +1,19 @@
+{
+  "name": "morrow-workspace",
+  "private": true,
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "workspaces": [
+    "express-jwt-sqlite",
+    "frontend"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace frontend",
+    "lint": "npm run lint --workspace frontend",
+    "test": "npm test --workspace express-jwt-sqlite",
+    "dev:api": "npm start --workspace express-jwt-sqlite",
+    "dev:web": "npm run dev --workspace frontend",
+    "import:sqlite": "npm run import:sqlite --workspace express-jwt-sqlite"
+  }
+}
